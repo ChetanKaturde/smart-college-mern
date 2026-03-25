@@ -1,0 +1,142 @@
+const AppError = require("../utils/AppError");
+const logger = require("../utils/logger");
+
+/**
+ * Global Error Handler Middleware
+ */
+const errorHandler = (err, req, res, next) => {
+  let error = { ...err };
+
+  // FIX: Handle case when err.message is undefined
+  error.message = err.message || 'Internal server error';
+
+  // Log error using Winston (file only, not console)
+  logger.logError(`[Error Handler] ${err.name || 'Error'}: ${error.message}`, {
+    name: err.name,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    url: req.originalUrl,
+    method: req.method,
+    userId: req.user?._id || req.user?.id,
+  });
+
+  // FIX: Mongoose Connection/Server Error
+  if (err.name === 'MongooseError' || err.name === 'MongoServerError') {
+    error = {
+      statusCode: 500,
+      message: 'Database error occurred',
+      code: 'DATABASE_ERROR'
+    };
+  }
+
+  // Mongoose CastError (Invalid ObjectId)
+  if (err.name === 'CastError') {
+    error = {
+      statusCode: 400,
+      message: 'Invalid ID format',
+      code: 'INVALID_ID'
+    };
+  }
+
+  // Mongoose Duplicate Key Error (E11000)
+  if (err.code === 11000) {
+    const field = Object.keys(err.keyValue)[0];
+    error = {
+      statusCode: 409,
+      message: `${field} already exists`,
+      code: 'DUPLICATE_FIELD'
+    };
+  }
+
+  // Mongoose ValidationError
+  if (err.name === 'ValidationError') {
+    const messages = Object.values(err.errors).map(val => val.message);
+    error = {
+      statusCode: 400,
+      message: messages.join(', '),
+      code: 'VALIDATION_ERROR'
+    };
+  }
+
+  // JWT JsonWebTokenError
+  if (err.name === 'JsonWebTokenError') {
+    error = {
+      statusCode: 401,
+      message: 'Invalid token',
+      code: 'INVALID_TOKEN'
+    };
+  }
+
+  // JWT TokenExpiredError
+  if (err.name === 'TokenExpiredError') {
+    error = {
+      statusCode: 401,
+      message: 'Token expired',
+      code: 'TOKEN_EXPIRED'
+    };
+  }
+
+  // Stripe API Errors
+  if (err.type === 'StripeCardError' || err.type === 'StripeAPIError') {
+    error = {
+      statusCode: 400,
+      message: err.message || 'Payment failed',
+      code: 'STRIPE_ERROR'
+    };
+  }
+
+  // Express Validator Errors
+  if (err.array && typeof err.array === 'function') {
+    const validationErrors = err.array();
+    error = {
+      statusCode: 400,
+      message: validationErrors.map(e => e.msg).join(', '),
+      code: 'VALIDATION_ERROR',
+      details: validationErrors
+    };
+  }
+
+  // Multer Errors (File Upload)
+  if (err.name === 'MulterError') {
+    error = {
+      statusCode: 400,
+      message: `File upload error: ${err.message}`,
+      code: 'FILE_UPLOAD_ERROR'
+    };
+  }
+
+  // Operational Error (AppError)
+  if (err instanceof AppError) {
+    error = {
+      statusCode: err.statusCode,
+      message: err.message,
+      code: err.code
+    };
+  }
+
+  // Determine final response values
+  const statusCode = error.statusCode || 500;
+  const message = error.message || 'Internal server error';
+  const code = error.code || 'INTERNAL_ERROR';
+
+  // 🔒 STANDARDIZED ERROR RESPONSE FORMAT
+  // Format: { success: false, error: { code, message, details } }
+  const response = {
+    success: false,
+    error: {
+      code,
+      message: process.env.NODE_ENV === 'production' && statusCode === 500
+        ? 'Internal server error' // Hide detailed error messages in production for 500s
+        : message,
+      details: error.details || {}
+    }
+  };
+
+  // Add stack trace in development only
+  if (process.env.NODE_ENV === 'development' && err.stack) {
+    response.error.stack = err.stack;
+  }
+
+  res.status(statusCode).json(response);
+};
+
+module.exports = errorHandler;
