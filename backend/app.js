@@ -15,6 +15,10 @@ const logger = require("./src/utils/logger");
 
 const app = express();
 
+/* ================= TRUST PROXY (nginx) ================= */
+// Required for express-rate-limit to get real client IP behind nginx
+app.set('trust proxy', 1);
+
 /* ================= CORS CONFIGURATION ================= */
 const corsOrigins = process.env.CORS_ORIGINS 
   ? process.env.CORS_ORIGINS.split(',') 
@@ -47,16 +51,16 @@ app.use(express.json());
 app.use(securityMiddleware);
 
 /* ================= RATE LIMITING ================= */
-// Global limiter applied to ALL /api/* routes (development-friendly)
-app.use("/api/", globalLimiter);
-
-// Specific limiters override global for their specific paths
+// Specific limiters applied BEFORE globalLimiter to avoid double-counting
 app.use("/health-check", healthCheckLimiter);
 app.use("/api/public", publicLimiter);
 app.use("/api/stripe", paymentLimiter);
 app.use("/api/student/payments", paymentLimiter);
 app.use("/api/admin/payments", paymentLimiter);
 app.use("/api/fees/structure", paymentLimiter);
+
+// Global limiter applied to remaining /api/* routes
+app.use("/api/", globalLimiter);
 
 /* ================= AUTH & CORE ================= */
 app.use("/api/auth", require("./src/routes/auth.routes"));
